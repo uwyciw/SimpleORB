@@ -1,18 +1,14 @@
 /**
   ******************************************************************************
-  * @file    simple_orb.c
+  * @file    simple_orb.h
   * @author  lx
   * @version V1.0.0
   * @date    2026-07-12
-  * @brief   SimpleORB - 一款基于发布/订阅模式的轻量级异步消息中间件实现
-  *          支持两种同步模式：
-  *            - Sequence Lock（无锁原子序列锁，基于 C11 <stdatomic.h>）
-  *            - Mutex（互斥锁，通过用户提供的 take/give 回调函数操作）
-  *          每个 Topic 维护一个生成号（generation），发布者递增该号码，
-  *          订阅者通过比较生成号判断数据是否更新，从而实现线程安全的数据交换。
+  * @brief   -SimpleORB - 一款基于发布/订阅模式的轻量级异步消息中间件
+  *          -支持 SequenceLock 和 Mutex 两种临界区保护方案，SequenceLock 方案适合裸机环境或写少读多场景使用，Mutex 方案适合在有 RTOS 且读写均衡场景使用
   ******************************************************************************
   * @attention
-  * 本代码为自由软件，可在 GNU Affero General Public License v3 条款下分发和使用。
+  * ORB_HANDLE_T 需要被定义为全局或静态变量
   ******************************************************************************
   */
 
@@ -20,26 +16,15 @@
 #include <string.h>
 #include "simple_orb.h"
 
-/********************************************************************************
-*                          Public Functions
-********************************************************************************/
-
-/**
- * @brief 初始化 SimpleORB 句柄（Sequence Lock 无锁同步模式）
- *
- * @details 使用 C11 atomic sequence lock 实现线程安全，无需互斥锁。
- *          写入方交替设置奇数/偶数序列号：
- *            - 偶数 = 读者可以安全读取的阶段
- *            - 奇数 = 写入方正在修改数据的阶段
- *          读取方通过判断序列锁的最低位是否为 0 来避免读到脏数据。
- *          take/give 回调可选为 NULL，此时仅依赖原子操作完成同步。
- * @param pORBHandle      SimpleORB 句柄指针
- * @param wait            忙等延迟函数指针（在无锁模式下用于减少 CPU 占用），可为 NULL
- * @param take            获取临界区资源回调，与 give 要么同时为 NULL，要么同时非 NULL
- * @param give            释放临界区资源回调，与 take 要么同时为 NULL，要么同时非 NULL
- * @retval ORB_ERR_NONE              初始化成功
- * @retval ORB_ERR_INVALID_PARAM     pORBHandle 为空或 take/give 仅有一个非空时返回此值
- */
+ /**
+  * @brief 初始化 SimpleORB 句柄，并使用顺序锁作为临界区保护方案
+  * @attention 不可与 ORBInitUseMutex 同时使用
+  * @param pORBHandle      SimpleORB 句柄指针
+  * @param wait            每次查询到顺序锁处于“写入进行中”状态时，如该函数不为 NULL，则会调用该函数
+  * @param take            仅对发布操作生效的互斥锁操作函数，如不需要可以为 NULL，订阅操作使用顺序锁进行互斥，与 give 要么同时为 NULL，要么同时非 NULL
+  * @param give            仅对发布操作生效的互斥锁操作函数，如不需要可以为 NULL，订阅操作使用顺序锁进行互斥，与 give 要么同时为 NULL，要么同时非 NULL
+  * @return ORB_ERR_T      ORB_ERR_NONE 表示初始化成功，ORB_ERR_INVALID_PARAM 表示参数无效
+  */
 ORB_ERR_T ORBInitUseSequenceLock(ORB_HANDLE_T * pORBHandle, void(*wait)(void), void(*take)(void), void(*give)(void))
 {
     if (pORBHandle == NULL || (take == NULL && give != NULL) || (take != NULL && give == NULL)) {
@@ -63,15 +48,12 @@ ORB_ERR_T ORBInitUseSequenceLock(ORB_HANDLE_T * pORBHandle, void(*wait)(void), v
 }
 
 /**
- * @brief 初始化 SimpleORB 句柄（Mutex 互斥同步模式）
- *
- * @details 使用外部提供的 Mutex 回调实现线程安全。适用于不支持原子操作的平台。
- *          take/give 回调必须在每次调用临界区操作前/后执行，确保数据一致性。
- * @param pORBHandle  SimpleORB 句柄指针
- * @param take        获取锁函数指针（如 osMutexTake / sem_wait），不可为 NULL
- * @param give        释放锁函数指针（如 osMutexRelease / sem_post），不可为 NULL
- * @retval ORB_ERR_NONE          初始化成功
- * @retval ORB_ERR_INVALID_PARAM Take 或 Give 为 NULL 时返回此值
+ * @brief 初始化 SimpleORB 句柄，并使用互斥锁作为临界区保护方案
+ * @attention 不可与 ORBInitUseSequenceLock 同时使用
+ * @param pORBHandle      SimpleORB 句柄指针
+ * @param take            获取 Mutex 的 P 操作回调，不可为 NULL
+ * @param give            释放 Mutex 的 V 操作回调，不可为 NULL
+ * @return ORB_ERR_T      ORB_ERR_NONE 表示初始化成功，ORB_ERR_INVALID_PARAM 表示参数无效
  */
 ORB_ERR_T ORBInitUseMutex(ORB_HANDLE_T * pORBHandle, void(*take)(void), void(*give)(void))
 {
@@ -97,16 +79,14 @@ ORB_ERR_T ORBInitUseMutex(ORB_HANDLE_T * pORBHandle, void(*take)(void), void(*gi
 
 /**
  * @brief 发布数据到 Topic
- *
- * @details 将 data 和 length 保存到句柄中，同时将 generation 递增。
- *          所有后续订阅者调用检查/拷贝时只会看到递增后的新代数，旧数据不会被读到。
- *          Sequence Lock 模式：+1 进入写入态 → 写数据 → +1 恢复稳定态，并通知所有订阅者。
- *          Mutex 模式：获取临界区 → 写数据 → 释放临界区，并通知所有订阅者。
+ * @details 将 data 和 length 写入共享状态，递增 generation。
+ *          完成后遍历所有订阅者，如果订阅者注册了 sendMail 回调函数，则会调用各自个订阅者注册的 sendMail() 函数。
+ *          Sequence Lock 模式：+1 进入"写入中"态 → 写数据 → +1 恢复稳定态。
+ *          Mutex 模式：获取临界区 → 写数据 → 释放临界区。
  * @param pORBHandle      SimpleORB 句柄指针
- * @param data            发布的原始数据缓冲区指针（由发布者管理生命周期）
- * @param length          数据长度（字节），必须大于 0
- * @retval ORB_ERR_NONE          发布成功
- * @retval ORB_ERR_INVALID_PARAM pORBHandle、data 为空或 length <= 0 时返回此值
+ * @param data            新数据的缓冲区指针（数据由使用者管理生命周期，发布者仅持有引用）
+ * @param length          数据字节长度，必须 >0
+ * @return ORB_ERR_T      ORB_ERR_NONE 表示发布成功，ORB_ERR_INVALID_PARAM 表示参数无效
  */
 ORB_ERR_T ORBPublish(ORB_HANDLE_T * pORBHandle, void * data, int length)
 {
@@ -137,8 +117,7 @@ ORB_ERR_T ORBPublish(ORB_HANDLE_T * pORBHandle, void * data, int length)
         /* Mutex 模式：释放互斥锁 */
         pORBHandle->giveMutexORB();
     } else {
-        /* Sequence Lock 模式：序列锁再+1（偶数值），既表示"写入完成"也作为 release fence，
-         * 确保上述 data/length/generation 的修改对所有读者可见 */
+        /* Sequence Lock 模式：序列锁再+1（偶数值），既表示"写入完成 */
         atomic_fetch_add_explicit(&pORBHandle->sequenceLock, 1, memory_order_release);
         if (pORBHandle->giveMutexSequenceLock != NULL) {
             pORBHandle->giveMutexSequenceLock();
@@ -157,15 +136,14 @@ ORB_ERR_T ORBPublish(ORB_HANDLE_T * pORBHandle, void * data, int length)
 
 /**
  * @brief 注册订阅者到 Topic
- *
- * @details 将订阅者挂入 Topic 的单链表尾部，并同步当前最新的 generation。
- *          send/receive 回调要么同时为 NULL（非阻塞模式），要么同时非 NULL（阻塞模式）。
+ * @details 将订阅者节点尾插到 Topic 的 subscriber 链表中，并拷贝当前最新 generation。
+ *          阻塞模式（send/receive 非空）：适用于事件驱动场景，订阅者阻塞等待 + 发布者发送邮箱事件。
+ *          非阻塞模式（send/receive 均为 NULL）：适用于纯轮询场景。
  * @param pORBHandle                  SimpleORB 句柄指针
  * @param pORBSubscriptionHandle      订阅者句柄指针
  * @param send                        发送回调函数指针（阻塞模式下使用），为空时 receive 也必须为空
  * @param receive                     接收回调函数指针（阻塞模式下使用），为空时 send 也必须为空
- * @retval ORB_ERR_NONE              订阅成功
- * @retval ORB_ERR_INVALID_PARAM     参数为空或 send/receive 仅有一个非空时返回此值
+ * @return ORB_ERR_T                  ORB_ERR_NONE 表示订阅成功，ORB_ERR_INVALID_PARAM 表示参数无效
  */
 ORB_ERR_T ORBSubscribe(ORB_HANDLE_T * pORBHandle, ORB_SUBSCRIPTION_HANDLE_T * pORBSubscriptionHandle, void(*send)(void), void(*receive)(void))
 {
@@ -204,14 +182,13 @@ ORB_ERR_T ORBSubscribe(ORB_HANDLE_T * pORBHandle, ORB_SUBSCRIPTION_HANDLE_T * pO
 
 /**
  * @brief 非阻塞方式检查数据是否更新
- *
- * @details 等待并发布方完成本次写入后，读取当前 generation 与订阅者的缓存 generation 比较。
- *          Sequence Lock 模式：Spin-Until-Stable 确保读到一致的数据 → 比较代数。
- *          Mutex 模式：加锁 → 读 generation → 解锁 → 比较代数。
- *          仅不做数据拷贝，适用于轮询场景。
+ * @details 读取当前 Topic 的 generation 并与订阅者缓存值比较。
+ *          Sequence Lock 模式下：等到稳定态 → 读 generation → Spin Until Stable 验证一致性。
+ *          Mutex 模式下：加锁 → 读 generation → 解锁。
+ *          仅做增量检测，不拷贝数据。
  * @param pORBSubscriptionHandle    订阅者句柄指针
  * @param updated                   输出参数：true 表示有新数据待处理，false 表示与上次一致无变化
- * @retval ORB_ERR_NONE            检查成功
+ * @return ORB_ERR_T                ORB_ERR_NONE 表示检查成功
  */
 ORB_ERR_T ORBCheckNoBlock(ORB_SUBSCRIPTION_HANDLE_T * pORBSubscriptionHandle, bool * updated)
 {
@@ -255,16 +232,11 @@ ORB_ERR_T ORBCheckNoBlock(ORB_SUBSCRIPTION_HANDLE_T * pORBSubscriptionHandle, bo
 
 /**
  * @brief 阻塞方式检查数据是否更新
- *
- * @details 先调用 receiveMail() 回调清空旧消息状态，然后同步读取并比较 generation。
- *          Sequence Lock 模式：Spin-Until-Stable 确保读到一致的数据 → 比较代数。
- *          Mutex 模式：加锁 → 读 generation → 解锁 → 比较代数。
- *          适用于带有 Mail/事件机制的阻塞订阅场景。
+ * @details 调用 receiveMail() 阻塞等待发布者在更新数据时通过 sendMail() 发布邮箱事件。
  * @param pORBSubscriptionHandle    订阅者句柄指针
- * @param updated                   输出参数：true 表示有新数据待处理，false 表示无更新
- * @retval ORB_ERR_NONE            检查成功
- * @retval ORB_ERR_INVALID_PARAM   pORBSubscriptionHandle 或 updated 为 NULL 时返回此值
- * @retval ORB_ERR_NO_MAIL         未配置 receiveMail 回调（即非阻塞模式）时返回此值
+ * @param updated                   输出参数：true 表示有新数据，false 表示无更新
+ * @return ORB_ERR_T                ORB_ERR_NONE 表示检查成功
+ * @return ORB_ERR_NO_MAIL          注册订阅时，未配置 receiveMail 回调函数
  */
 ORB_ERR_T ORBCheckBlock(ORB_SUBSCRIPTION_HANDLE_T * pORBSubscriptionHandle, bool * updated)
 {
@@ -275,7 +247,7 @@ ORB_ERR_T ORBCheckBlock(ORB_SUBSCRIPTION_HANDLE_T * pORBSubscriptionHandle, bool
         return ORB_ERR_INVALID_PARAM;
     }
 
-    // 有 receiveMail 则先调用其回调（由用户清空上一轮消息内容）
+    // 有 receiveMail 则先调用其回调
     if (pORBSubscriptionHandle->receiveMail == NULL) {
         return ORB_ERR_NO_MAIL;
     } else {
@@ -315,16 +287,14 @@ ORB_ERR_T ORBCheckBlock(ORB_SUBSCRIPTION_HANDLE_T * pORBSubscriptionHandle, bool
 
 /**
  * @brief 将 Topic 上的最新数据复制到指定缓冲区
- *
- * @details 以原子/互斥方式安全地拷贝一帧完整数据（不会出现边读边写）。
- *          Sequence Lock 模式：Spin-Until-Stable → memcpy → 更新本地 generation。
- *          Mutex 模式：获取临界区 → memcpy → 更新本地 generation → 释放临界区。
- *          复制完成后自动更新订阅者的 generation，防止下次重复处理同一帧。
+ * @details 以原子/互斥方式安全地拷贝一帧完整数据：
+ *          - Sequence Lock 模式：Spin-Until-Stable 确认写入完成 → memcpy → 更新本地 generation
+ *          - Mutex 模式：获取临界区 → memcpy → 更新本地 generation → 释放临界区
+ *          复制完毕后自动更新订阅者的 generation 字段。
  * @param pORBSubscriptionHandle    订阅者句柄指针
  * @param data                      目标缓冲区指针，需由调用者分配并确保容量 >= length
  * @param length                    需要复制的数据字节长度，必须 <= Topic 当前数据的真实长度
- * @retval ORB_ERR_NONE            复制成功
- * @retval ORB_ERR_INVALID_PARAM   参数为空、length <= 0 或 length > topic length 时返回此值
+ * @return ORB_ERR_T                ORB_ERR_NONE 表示复制成功，ORB_ERR_INVALID_PARAM 表示参数无效
  */
 ORB_ERR_T ORBCopy(ORB_SUBSCRIPTION_HANDLE_T * pORBSubscriptionHandle, void * data, int length)
 {
