@@ -7,8 +7,7 @@
   * @brief   -SimpleORB - 一款基于发布/订阅模式的轻量级异步消息中间件
   *          -支持 SequenceLock 和 Mutex 两种临界区保护方案，SequenceLock 方案适合裸机环境或写少读多场景使用，Mutex 方案适合在有 RTOS 且读写均衡场景使用
   ******************************************************************************
-  * @attention
-  * ORB_HANDLE_T 需要被定义为全局或静态变量
+  * 
   ******************************************************************************
   */
 
@@ -37,6 +36,7 @@ ORB_ERR_T ORBInitUseSequenceLock(ORB_HANDLE_T * pORBHandle, void(*wait)(void), v
     pORBHandle->data = NULL;
     pORBHandle->length = 0;
 
+    atomic_init(&(pORBHandle->sequenceLock), 0);
     pORBHandle->wait = wait;
     pORBHandle->takeMutexSequenceLock = take;
     pORBHandle->giveMutexSequenceLock = give;
@@ -67,6 +67,7 @@ ORB_ERR_T ORBInitUseMutex(ORB_HANDLE_T * pORBHandle, void(*take)(void), void(*gi
     pORBHandle->data = NULL;
     pORBHandle->length = 0;
 
+    atomic_init(&(pORBHandle->sequenceLock), 0);
     pORBHandle->wait = NULL;
     pORBHandle->takeMutexSequenceLock = NULL;
     pORBHandle->giveMutexSequenceLock = NULL;
@@ -104,7 +105,7 @@ ORB_ERR_T ORBPublish(ORB_HANDLE_T * pORBHandle, void * data, int length)
             pORBHandle->takeMutexSequenceLock();
         }
         /* 将 sequenceLock +1（奇数值），表示"写入进行中"，阻塞后续读取者 */
-        atomic_fetch_add_explicit(&pORBHandle->sequenceLock, 1, memory_order_acquire);
+        atomic_fetch_add_explicit(&pORBHandle->sequenceLock, 1, memory_order_relaxed);
     }
 
     /* --- 临界区核心操作：更新 Topic 的共享数据帧 --- */
@@ -118,7 +119,7 @@ ORB_ERR_T ORBPublish(ORB_HANDLE_T * pORBHandle, void * data, int length)
         pORBHandle->giveMutexORB();
     } else {
         /* Sequence Lock 模式：序列锁再+1（偶数值），既表示"写入完成 */
-        atomic_fetch_add_explicit(&pORBHandle->sequenceLock, 1, memory_order_release);
+        atomic_fetch_add_explicit(&pORBHandle->sequenceLock, 1, memory_order_relaxed);
         if (pORBHandle->giveMutexSequenceLock != NULL) {
             pORBHandle->giveMutexSequenceLock();
         }

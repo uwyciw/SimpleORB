@@ -7,8 +7,7 @@
   * @brief   -SimpleORB - 一款基于发布/订阅模式的轻量级异步消息中间件
   *          -支持 SequenceLock 和 Mutex 两种临界区保护方案，SequenceLock 方案适合裸机环境或写少读多场景使用，Mutex 方案适合在有 RTOS 且读写均衡场景使用
   ******************************************************************************
-  * @attention
-  * ORB_HANDLE_T 需要被定义为全局或静态变量
+  *
   ******************************************************************************
   */
 
@@ -42,7 +41,6 @@ struct orb_subscription_handle_t;
 /**
  * @brief SimpleORB 句柄结构体（代表一个 Topic）
  *        每个 Topic 独立维护一份共享数据，支持多个订阅者异步读取。
- *        使用者需通过 __ORB_HANDLE_ALLOC() 宏分配此结构体的实例，并需要定义为全局或静态变量。
  */
 typedef struct orb_handle_t {
     struct orb_subscription_handle_t * pORBSubscriptionList;    /**< 订阅者链表的头节点指针 */
@@ -74,14 +72,6 @@ typedef struct orb_subscription_handle_t {
     void(*sendMail)(void);                                      /**< 订阅者如需要发布者在发布 ORB 时，通过邮箱通知自己，则应在注册订阅时提供邮箱的发送和接收函数，如不需要可以设置为 NULL */
     void(*receiveMail)(void);                                   /**< 订阅者如需要发布者在发布 ORB 时，通过邮箱通知自己，则应在注册订阅时提供邮箱的发送和接收函数，如不需要可以设置为 NULL */
 } ORB_SUBSCRIPTION_HANDLE_T;
-
-/**
- * @brief 分配 SimpleORB 句柄的宏
- * @param __NAME__  句柄变量名
- * @attention 必须定义为全局或静态变量
- * 示例: __ORB_HANDLE_ALLOC(myTopic) 等价于定义 ORB_HANDLE_T myTopic = {.sequenceLock = ATOMIC_VAR_INIT(0)}
- */
-#define __ORB_HANDLE_ALLOC(__NAME__) ORB_HANDLE_T __NAME__ = {.sequenceLock = ATOMIC_VAR_INIT(0)}
 
  /**
   * @brief 初始化 SimpleORB 句柄，并使用顺序锁作为临界区保护方案
