@@ -2,39 +2,61 @@
   ******************************************************************************
   * @file    simple_orb.h
   * @author  lx
-  * @version V1.0.0
   * @date    2026-07-12
   * @brief   -SimpleORB - 一款基于发布/订阅模式的轻量级异步消息中间件
   *          -支持 SequenceLock 和 Mutex 两种临界区保护方案，SequenceLock 方案适合裸机环境或写少读多场景使用，Mutex 方案适合在有 RTOS 且读写均衡场景使用
   ******************************************************************************
-  * 
+  *
   ******************************************************************************
-  */
+***/
 
-  /* Includes ------------------------------------------------------------------*/
+/* Includes ------------------------------------------------------------------*/
 #include <string.h>
 #include "simple_orb.h"
 
- /**
-  * @brief 初始化 SimpleORB 句柄，并使用顺序锁作为临界区保护方案
-  * @attention 不可与 ORBInitUseMutex 同时使用
-  * @param pORBHandle      SimpleORB 句柄指针
-  * @param wait            每次查询到顺序锁处于“写入进行中”状态时，如该函数不为 NULL，则会调用该函数
-  * @param take            仅对发布操作生效的互斥锁操作函数，如不需要可以为 NULL，订阅操作使用顺序锁进行互斥，与 give 要么同时为 NULL，要么同时非 NULL
-  * @param give            仅对发布操作生效的互斥锁操作函数，如不需要可以为 NULL，订阅操作使用顺序锁进行互斥，与 give 要么同时为 NULL，要么同时非 NULL
-  * @return ORB_ERR_T      ORB_ERR_NONE 表示初始化成功，ORB_ERR_INVALID_PARAM 表示参数无效
-  */
-ORB_ERR_T ORBInitUseSequenceLock(ORB_HANDLE_T * pORBHandle, void(*wait)(void), void(*take)(void), void(*give)(void))
+static ORB_HANDLE_T * gORBHandleListHead = NULL;
+static ORB_HANDLE_T * gORBHandleListTail = NULL;
+
+
+/**
+ * @brief 创建 SimpleORB 主题，并使用顺序锁作为临界区保护方案
+ * @attention 不可与 ORBCreateUseMutex 同时使用
+ * @param topic           主题名称，用于唯一标识主题
+ * @param pORBHandle      SimpleORB 句柄指针
+ * @param wait            每次查询到顺序锁处于“写入进行中”状态时，如该函数不为 NULL，则会调用该函数
+ * @param take            仅对发布操作生效的互斥锁操作函数，如不需要可以为 NULL，订阅操作使用顺序锁进行互斥，与 give 要么同时为 NULL，要么同时非 NULL
+ * @param give            仅对发布操作生效的互斥锁操作函数，如不需要可以为 NULL，订阅操作使用顺序锁进行互斥，与 give 要么同时为 NULL，要么同时非 NULL
+ * @param buffer          用于存储主题数据的数据缓冲区指针，初始化后，该区域不应该被其他操作修改
+ * @param length          数据缓冲区长度，必须 >0
+ * @return ORB_ERR_T      ORB_ERR_NONE 表示初始化成功，ORB_ERR_INVALID_PARAM 表示参数无效
+ */
+ORB_ERR_T ORBCreateUseSequenceLock(const char * topic, ORB_HANDLE_T * pORBHandle, void(*wait)(void), void(*take)(void), void(*give)(void), void * buffer, int length)
 {
-    if (pORBHandle == NULL || (take == NULL && give != NULL) || (take != NULL && give == NULL)) {
+    uint32_t uuid = ORBNameToUUID(topic);
+    ORB_HANDLE_T * pORBHandleList = gORBHandleListHead;
+
+    if (topic == NULL || pORBHandle == NULL || (take == NULL && give != NULL) || (take != NULL && give == NULL) || buffer == NULL || length <= 0) {
         return ORB_ERR_INVALID_PARAM;
     }
 
+    ORBCriticalEnter();
+    while (pORBHandleList != NULL) {
+        if (pORBHandleList->uuid == uuid) {
+            ORBCriticalExit();
+            return ORB_ERR_TOPIC_EXIST;
+        }
+        pORBHandleList = pORBHandleList->next;
+    }
+    ORBCriticalExit();
+
     pORBHandle->pORBSubscriptionList = NULL;
 
+    pORBHandle->topic = topic;
+    pORBHandle->uuid = uuid;
     pORBHandle->generation = 0;
-    pORBHandle->data = NULL;
-    pORBHandle->length = 0;
+    pORBHandle->data = buffer;
+    pORBHandle->length = length;
+    pORBHandle->next = NULL;
 
     atomic_init(&(pORBHandle->sequenceLock), 0);
     pORBHandle->wait = wait;
@@ -44,28 +66,57 @@ ORB_ERR_T ORBInitUseSequenceLock(ORB_HANDLE_T * pORBHandle, void(*wait)(void), v
     pORBHandle->takeMutexORB = NULL;
     pORBHandle->giveMutexORB = NULL;
 
+    ORBCriticalEnter();
+    if (gORBHandleListHead == NULL) {
+        gORBHandleListHead = pORBHandle;
+        gORBHandleListTail = pORBHandle;
+    } else {
+        gORBHandleListTail->next = pORBHandle;
+        gORBHandleListTail = pORBHandle;
+    }
+    ORBCriticalExit();
+
     return ORB_ERR_NONE;
 }
 
 /**
- * @brief 初始化 SimpleORB 句柄，并使用互斥锁作为临界区保护方案
- * @attention 不可与 ORBInitUseSequenceLock 同时使用
+ * @brief 创建 SimpleORB 主题，并使用互斥锁作为临界区保护方案
+ * @attention 不可与 ORBCreateUseSequenceLock 同时使用
+ * @param topic           主题名称，用于唯一标识主题
  * @param pORBHandle      SimpleORB 句柄指针
  * @param take            获取 Mutex 的 P 操作回调，不可为 NULL
  * @param give            释放 Mutex 的 V 操作回调，不可为 NULL
+ * @param buffer          用于存储主题数据的数据缓冲区指针，初始化后，该区域不应该被其他操作修改
+ * @param length          数据缓冲区长度，必须 >0
  * @return ORB_ERR_T      ORB_ERR_NONE 表示初始化成功，ORB_ERR_INVALID_PARAM 表示参数无效
  */
-ORB_ERR_T ORBInitUseMutex(ORB_HANDLE_T * pORBHandle, void(*take)(void), void(*give)(void))
+ORB_ERR_T ORBCreateUseMutex(const char * topic, ORB_HANDLE_T * pORBHandle, void(*take)(void), void(*give)(void), void * buffer, int length)
 {
-    if (pORBHandle == NULL || take == NULL || give == NULL) {
+    uint32_t uuid = ORBNameToUUID(topic);
+    ORB_HANDLE_T * pORBHandleList = gORBHandleListHead;
+
+    if (topic == NULL || pORBHandle == NULL || take == NULL || give == NULL || buffer == NULL || length <= 0) {
         return ORB_ERR_INVALID_PARAM;
     }
 
+    ORBCriticalEnter();
+    while (pORBHandleList != NULL) {
+        if (pORBHandleList->uuid == uuid) {
+            ORBCriticalExit();
+            return ORB_ERR_TOPIC_EXIST;
+        }
+        pORBHandleList = pORBHandleList->next;
+    }
+    ORBCriticalExit();
+
     pORBHandle->pORBSubscriptionList = NULL;
 
+    pORBHandle->topic = topic;
+    pORBHandle->uuid = uuid;
     pORBHandle->generation = 0;
-    pORBHandle->data = NULL;
-    pORBHandle->length = 0;
+    pORBHandle->data = buffer;
+    pORBHandle->length = length;
+    pORBHandle->next = NULL;
 
     atomic_init(&(pORBHandle->sequenceLock), 0);
     pORBHandle->wait = NULL;
@@ -74,6 +125,16 @@ ORB_ERR_T ORBInitUseMutex(ORB_HANDLE_T * pORBHandle, void(*take)(void), void(*gi
 
     pORBHandle->takeMutexORB = take;
     pORBHandle->giveMutexORB = give;
+
+    ORBCriticalEnter();
+    if (gORBHandleListHead == NULL) {
+        gORBHandleListHead = pORBHandle;
+        gORBHandleListTail = pORBHandle;
+    } else {
+        gORBHandleListTail->next = pORBHandle;
+        gORBHandleListTail = pORBHandle;
+    }
+    ORBCriticalExit();
 
     return ORB_ERR_NONE;
 }
@@ -84,14 +145,49 @@ ORB_ERR_T ORBInitUseMutex(ORB_HANDLE_T * pORBHandle, void(*take)(void), void(*gi
  *          完成后遍历所有订阅者，如果订阅者注册了 sendMail 回调函数，则会调用各自个订阅者注册的 sendMail() 函数。
  *          Sequence Lock 模式：+1 进入"写入中"态 → 写数据 → +1 恢复稳定态。
  *          Mutex 模式：获取临界区 → 写数据 → 释放临界区。
- * @param pORBHandle      SimpleORB 句柄指针
+ * @param handle          SimpleORB 句柄指针
+ * @param topic           主题名称
+ * @param uuid            主题唯一标识
  * @param data            新数据的缓冲区指针（数据由使用者管理生命周期，发布者仅持有引用）
  * @param length          数据字节长度，必须 >0
  * @return ORB_ERR_T      ORB_ERR_NONE 表示发布成功，ORB_ERR_INVALID_PARAM 表示参数无效
  */
-ORB_ERR_T ORBPublish(ORB_HANDLE_T * pORBHandle, void * data, int length)
+static ORB_ERR_T ORBPublish(ORB_HANDLE_T * handle, const char * topic, uint32_t uuid, void * data, int length)
 {
-    if (pORBHandle == NULL || data == NULL || length <= 0) {
+    ORB_HANDLE_T * pORBHandle = NULL;
+    ORB_HANDLE_T * pORBHandleList = gORBHandleListHead;
+
+    if (handle != NULL) {
+        pORBHandle = handle;
+    } else if (handle == NULL && topic != NULL) {
+        ORBCriticalEnter();
+        while (pORBHandleList != NULL) {
+            if (strcmp(pORBHandleList->topic, topic) == 0) {
+                pORBHandle = pORBHandleList;
+                break;
+            }
+            pORBHandleList = pORBHandleList->next;
+        }
+        ORBCriticalExit();
+        if (pORBHandle == NULL) {
+            return ORB_ERR_TOPIC_NOT_EXIST;
+        }
+    } else {
+        ORBCriticalEnter();
+        while (pORBHandleList != NULL) {
+            if (pORBHandleList->uuid == uuid) {
+                pORBHandle = pORBHandleList;
+                break;
+            }
+            pORBHandleList = pORBHandleList->next;
+        }
+        ORBCriticalExit();
+        if (pORBHandle == NULL) {
+            return ORB_ERR_TOPIC_NOT_EXIST;
+        }
+    }
+
+    if (length <= 0 || pORBHandle->length != length) {
         return ORB_ERR_INVALID_PARAM;
     }
 
@@ -109,8 +205,7 @@ ORB_ERR_T ORBPublish(ORB_HANDLE_T * pORBHandle, void * data, int length)
     }
 
     /* --- 临界区核心操作：更新 Topic 的共享数据帧 --- */
-    pORBHandle->data = data;
-    pORBHandle->length = length;
+    memcpy(pORBHandle->data, data, length);
     pORBHandle->generation = pORBHandle->generation + 1;
 
     /* --- 释放同步原语 --- */
@@ -134,34 +229,79 @@ ORB_ERR_T ORBPublish(ORB_HANDLE_T * pORBHandle, void * data, int length)
 
     return ORB_ERR_NONE;
 }
+ORB_ERR_T ORBPublishByHandle(ORB_HANDLE_T * pORBHandle, void * data, int length)
+{
+    if (pORBHandle == NULL) {
+        return ORB_ERR_INVALID_PARAM;
+    }
+    return ORBPublish(pORBHandle, NULL, 0, data, length);
+}
+ORB_ERR_T ORBPublishByName(const char * topic, void * data, int length)
+{
+    if (topic == NULL) {
+        return ORB_ERR_INVALID_PARAM;
+    }
+    return ORBPublish(NULL, topic, 0, data, length);
+}
+ORB_ERR_T ORBPublishByUUID(uint32_t uuid, void * data, int length)
+{
+    return ORBPublish(NULL, NULL, uuid, data, length);
+}
 
 /**
  * @brief 注册订阅者到 Topic
  * @details 将订阅者节点尾插到 Topic 的 subscriber 链表中，并拷贝当前最新 generation。
- *          阻塞模式（send/receive 非空）：适用于事件驱动场景，订阅者阻塞等待 + 发布者发送邮箱事件。
+ *          阻塞模式（send/receive 非空）：适用于事件驱动场景，订阅者阻塞等待 + 发布者发送回调发送事件。
  *          非阻塞模式（send/receive 均为 NULL）：适用于纯轮询场景。
- * @param pORBHandle                  SimpleORB 句柄指针
+ * @param handle                      SimpleORB 句柄指针
+ * @param topic                       主题名称
+ * @param uuid                        主题唯一标识
  * @param pORBSubscriptionHandle      订阅者句柄指针
- * @param send                        发送回调函数指针（阻塞模式下使用），为空时 receive 也必须为空
- * @param receive                     接收回调函数指针（阻塞模式下使用），为空时 send 也必须为空
+ * @param send                        发送事件回调函数指针，若不需要可以为 NULL
+ * @param receive                     阻塞等待事件的回调函数指针，若不需要可以为 NULL
  * @return ORB_ERR_T                  ORB_ERR_NONE 表示订阅成功，ORB_ERR_INVALID_PARAM 表示参数无效
  */
-ORB_ERR_T ORBSubscribe(ORB_HANDLE_T * pORBHandle, ORB_SUBSCRIPTION_HANDLE_T * pORBSubscriptionHandle, void(*send)(void), void(*receive)(void))
+static ORB_ERR_T ORBSubscribe(ORB_HANDLE_T * handle, const char * topic, uint32_t uuid, ORB_SUBSCRIPTION_HANDLE_T * pORBSubscriptionHandle, void(*send)(void), void(*receive)(void))
 {
-    // send/receive 要么全非空，要么全为空
-    if (pORBHandle == NULL || pORBSubscriptionHandle == NULL || (send != NULL && receive == NULL) || (send == NULL && receive != NULL)) {
-        return ORB_ERR_INVALID_PARAM;
-    }
+    ORB_HANDLE_T * pORBHandle = NULL;
+    ORB_HANDLE_T * pORBHandleList = gORBHandleListHead;
 
+    if (handle != NULL) {
+        pORBHandle = handle;
+    } else if (handle == NULL && topic != NULL) {
+        ORBCriticalEnter();
+        while (pORBHandleList != NULL) {
+            if (strcmp(pORBHandleList->topic, topic) == 0) {
+                pORBHandle = pORBHandleList;
+                break;
+            }
+            pORBHandleList = pORBHandleList->next;
+        }
+        ORBCriticalExit();
+        if (pORBHandle == NULL) {
+            return ORB_ERR_TOPIC_NOT_EXIST;
+        }
+    } else {
+        ORBCriticalEnter();
+        while (pORBHandleList != NULL) {
+            if (pORBHandleList->uuid == uuid) {
+                pORBHandle = pORBHandleList;
+                break;
+            }
+            pORBHandleList = pORBHandleList->next;
+        }
+        ORBCriticalExit();
+        if (pORBHandle == NULL) {
+            return ORB_ERR_TOPIC_NOT_EXIST;
+        }
+    }
+    
+    ORBCriticalEnter();
     pORBSubscriptionHandle->pORBHandle = pORBHandle;
     pORBSubscriptionHandle->sendMail = send;
     pORBSubscriptionHandle->receiveMail = receive;
     pORBSubscriptionHandle->next = NULL;
     pORBSubscriptionHandle->generation = pORBHandle->generation;
-
-    if (pORBHandle->takeMutexORB != NULL) {
-        pORBHandle->takeMutexORB();
-    }
 
     // 尾插法加入订阅者链表
     if (pORBHandle->pORBSubscriptionList == NULL) {
@@ -173,12 +313,27 @@ ORB_ERR_T ORBSubscribe(ORB_HANDLE_T * pORBHandle, ORB_SUBSCRIPTION_HANDLE_T * pO
         }
         pCurrent->next = pORBSubscriptionHandle;
     }
-
-    if (pORBHandle->giveMutexORB != NULL) {
-        pORBHandle->giveMutexORB();
-    }
+    ORBCriticalExit();
 
     return ORB_ERR_NONE;
+}
+ORB_ERR_T ORBSubscribeByHandle(ORB_HANDLE_T * pORBHandle, ORB_SUBSCRIPTION_HANDLE_T * pORBSubscriptionHandle, void(*send)(void), void(*receive)(void))
+{
+    if (pORBHandle == NULL) {
+        return ORB_ERR_INVALID_PARAM;
+    }
+    return ORBSubscribe(pORBHandle, NULL, 0, pORBSubscriptionHandle, send, receive);
+}
+ORB_ERR_T ORBSubscribeByName(const char * topic, ORB_SUBSCRIPTION_HANDLE_T * pORBSubscriptionHandle, void(*send)(void), void(*receive)(void))
+{
+    if (topic == NULL) {
+        return ORB_ERR_INVALID_PARAM;
+    }
+    return ORBSubscribe(NULL, topic, 0, pORBSubscriptionHandle, send, receive);
+}
+ORB_ERR_T ORBSubscribeByUUID(uint32_t uuid, ORB_SUBSCRIPTION_HANDLE_T * pORBSubscriptionHandle, void(*send)(void), void(*receive)(void))
+{
+    return ORBSubscribe(NULL, NULL, uuid, pORBSubscriptionHandle, send, receive);
 }
 
 /**
@@ -195,6 +350,10 @@ ORB_ERR_T ORBCheckNoBlock(ORB_SUBSCRIPTION_HANDLE_T * pORBSubscriptionHandle, bo
 {
     unsigned int generation;
     uint32_t sequenceLock;
+
+    if (pORBSubscriptionHandle == NULL || updated == NULL) {
+        return ORB_ERR_INVALID_PARAM;
+    }
 
     // ---- 同步读取 current generation ----
     if (pORBSubscriptionHandle->pORBHandle->takeMutexORB != NULL) {
@@ -248,7 +407,6 @@ ORB_ERR_T ORBCheckBlock(ORB_SUBSCRIPTION_HANDLE_T * pORBSubscriptionHandle, bool
         return ORB_ERR_INVALID_PARAM;
     }
 
-    // 有 receiveMail 则先调用其回调
     if (pORBSubscriptionHandle->receiveMail == NULL) {
         return ORB_ERR_NO_MAIL;
     } else {
@@ -293,15 +451,15 @@ ORB_ERR_T ORBCheckBlock(ORB_SUBSCRIPTION_HANDLE_T * pORBSubscriptionHandle, bool
  *          - Mutex 模式：获取临界区 → memcpy → 更新本地 generation → 释放临界区
  *          复制完毕后自动更新订阅者的 generation 字段。
  * @param pORBSubscriptionHandle    订阅者句柄指针
- * @param data                      目标缓冲区指针，需由调用者分配并确保容量 >= length
- * @param length                    需要复制的数据字节长度，必须 <= Topic 当前数据的真实长度
+ * @param data                      用于存储主题数据的缓存区指针
+ * @param length                    缓存区长度，必须 >= Topic 当前数据的真实长度
  * @return ORB_ERR_T                ORB_ERR_NONE 表示复制成功，ORB_ERR_INVALID_PARAM 表示参数无效
  */
 ORB_ERR_T ORBCopy(ORB_SUBSCRIPTION_HANDLE_T * pORBSubscriptionHandle, void * data, int length)
 {
     uint32_t sequenceLock;
 
-    if (pORBSubscriptionHandle == NULL || data == NULL || length <= 0 || length > pORBSubscriptionHandle->pORBHandle->length) {
+    if (pORBSubscriptionHandle == NULL || data == NULL || length <= 0 || length < pORBSubscriptionHandle->pORBHandle->length) {
         return ORB_ERR_INVALID_PARAM;
     }
 
@@ -320,7 +478,7 @@ ORB_ERR_T ORBCopy(ORB_SUBSCRIPTION_HANDLE_T * pORBSubscriptionHandle, void * dat
                 }
             }
             sequenceLock = atomic_load_explicit(&pORBSubscriptionHandle->pORBHandle->sequenceLock, memory_order_relaxed);
-            memcpy(data, pORBSubscriptionHandle->pORBHandle->data, length);
+            memcpy(data, pORBSubscriptionHandle->pORBHandle->data, pORBSubscriptionHandle->pORBHandle->length);
             pORBSubscriptionHandle->generation = pORBSubscriptionHandle->pORBHandle->generation;
             if (sequenceLock == atomic_load_explicit(&pORBSubscriptionHandle->pORBHandle->sequenceLock, memory_order_relaxed)) {
                 break;
@@ -330,3 +488,32 @@ ORB_ERR_T ORBCopy(ORB_SUBSCRIPTION_HANDLE_T * pORBSubscriptionHandle, void * dat
 
     return ORB_ERR_NONE;
 }
+
+/**
+ * @brief 通过FNV-1a将主题名称转换为32bit唯一标识
+ * @param name 主题名称
+ * @return 32bit唯一标识
+ */
+uint32_t ORBNameToUUID(const char *name)
+{
+#define FNV1A_OFFSET_BASIS  UINT32_C(0x811C9DC5)
+#define FNV1A_PRIME         UINT32_C(0x01000193)
+    uint32_t hash = FNV1A_OFFSET_BASIS;
+    
+    if (name == NULL) {
+        return 0;
+    }
+
+    for (const unsigned char *p = (const unsigned char *)name; *p != '\0'; ++p) {
+        hash ^= (uint32_t)*p;
+        hash *= FNV1A_PRIME;
+    }
+    
+    return hash ? hash : 1;
+}
+
+/**
+ * @brief 临界区保护函数，由用户提供具体实现，在执行创建和订阅操作时，保护主题链表
+ */
+__WEAK void ORBCriticalEnter(void) {}
+__WEAK void ORBCriticalExit(void) {}
