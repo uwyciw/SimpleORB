@@ -1,0 +1,21 @@
+"C:\Program Files\IAR\arm\bin\armproc.dll"
+
+ "C:\Program Files\IAR\arm\bin\armstlink.dll"
+
+ D:\Code\SimpleORB\_Example\RTOS\EWARM\SimpleORB\Exe\SimpleORB.out
+
+ "--plugin=C:\Program Files\IAR\arm\bin\armLibSupportUniversal.dll"
+
+ "--device_macro=C:\Program Files\IAR\arm/config/debugger/ST/STM32H5xx.dmac"
+
+ "--device_macro=C:\Program Files\IAR\arm/config/debugger/ST/STM32H5xx_DBG.dmac"
+
+ "--device_macro=C:\Program Files\IAR\arm/config/debugger/ST/STM32H5xx_OB.dmac"
+
+ "--device_macro=C:\Program Files\IAR\arm/config/debugger/ST/STM32H5xx_TRACE.dmac"
+
+ "--flash_loader=C:\Program Files\IAR\arm/config/flashloader/ST/FlashSTM32H5xxxI.board"
+
+ 
+
+

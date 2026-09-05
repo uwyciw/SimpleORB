@@ -14,6 +14,16 @@
 #include <string.h>
 #include "simple_orb.h"
 
+#ifndef __WEAK
+  #if defined(__GNUC__) || defined(__ICCARM__)
+    #define __WEAK __attribute__((weak))
+  #elif defined(__CC_ARM) || defined(__ARMCC_VERSION)
+    #define __WEAK __weak
+  #else
+    #define __WEAK
+  #endif
+#endif
+
 static ORB_HANDLE_T * gORBHandleListHead = NULL;
 static ORB_HANDLE_T * gORBHandleListTail = NULL;
 
@@ -39,16 +49,6 @@ ORB_ERR_T ORBCreateUseSequenceLock(const char * topic, ORB_HANDLE_T * pORBHandle
         return ORB_ERR_INVALID_PARAM;
     }
 
-    ORBCriticalEnter();
-    while (pORBHandleList != NULL) {
-        if (pORBHandleList->uuid == uuid) {
-            ORBCriticalExit();
-            return ORB_ERR_TOPIC_EXIST;
-        }
-        pORBHandleList = pORBHandleList->next;
-    }
-    ORBCriticalExit();
-
     pORBHandle->pORBSubscriptionList = NULL;
 
     pORBHandle->topic = topic;
@@ -67,6 +67,14 @@ ORB_ERR_T ORBCreateUseSequenceLock(const char * topic, ORB_HANDLE_T * pORBHandle
     pORBHandle->giveMutexORB = NULL;
 
     ORBCriticalEnter();
+    while (pORBHandleList != NULL) {
+        if (pORBHandleList->uuid == uuid) {
+            ORBCriticalExit();
+            return ORB_ERR_TOPIC_EXIST;
+        }    
+        pORBHandleList = pORBHandleList->next;
+    }    
+
     if (gORBHandleListHead == NULL) {
         gORBHandleListHead = pORBHandle;
         gORBHandleListTail = pORBHandle;
@@ -99,16 +107,6 @@ ORB_ERR_T ORBCreateUseMutex(const char * topic, ORB_HANDLE_T * pORBHandle, void(
         return ORB_ERR_INVALID_PARAM;
     }
 
-    ORBCriticalEnter();
-    while (pORBHandleList != NULL) {
-        if (pORBHandleList->uuid == uuid) {
-            ORBCriticalExit();
-            return ORB_ERR_TOPIC_EXIST;
-        }
-        pORBHandleList = pORBHandleList->next;
-    }
-    ORBCriticalExit();
-
     pORBHandle->pORBSubscriptionList = NULL;
 
     pORBHandle->topic = topic;
@@ -127,6 +125,14 @@ ORB_ERR_T ORBCreateUseMutex(const char * topic, ORB_HANDLE_T * pORBHandle, void(
     pORBHandle->giveMutexORB = give;
 
     ORBCriticalEnter();
+    while (pORBHandleList != NULL) {
+        if (pORBHandleList->uuid == uuid) {
+            ORBCriticalExit();
+            return ORB_ERR_TOPIC_EXIST;
+        }    
+        pORBHandleList = pORBHandleList->next;
+    }    
+
     if (gORBHandleListHead == NULL) {
         gORBHandleListHead = pORBHandle;
         gORBHandleListTail = pORBHandle;
@@ -156,6 +162,10 @@ static ORB_ERR_T ORBPublish(ORB_HANDLE_T * handle, const char * topic, uint32_t 
 {
     ORB_HANDLE_T * pORBHandle = NULL;
     ORB_HANDLE_T * pORBHandleList = gORBHandleListHead;
+
+    if (data == NULL) {
+        return ORB_ERR_INVALID_PARAM;
+    }
 
     if (handle != NULL) {
         pORBHandle = handle;
@@ -266,12 +276,17 @@ static ORB_ERR_T ORBSubscribe(ORB_HANDLE_T * handle, const char * topic, uint32_
     ORB_HANDLE_T * pORBHandle = NULL;
     ORB_HANDLE_T * pORBHandleList = gORBHandleListHead;
 
+    if (pORBSubscriptionHandle == NULL) {
+        return ORB_ERR_INVALID_PARAM;
+    }
+
     if (handle != NULL) {
         pORBHandle = handle;
     } else if (handle == NULL && topic != NULL) {
+        uuid = ORBNameToUUID(topic);
         ORBCriticalEnter();
         while (pORBHandleList != NULL) {
-            if (strcmp(pORBHandleList->topic, topic) == 0) {
+            if (pORBHandleList->uuid == uuid) {
                 pORBHandle = pORBHandleList;
                 break;
             }
@@ -296,14 +311,13 @@ static ORB_ERR_T ORBSubscribe(ORB_HANDLE_T * handle, const char * topic, uint32_
         }
     }
     
-    ORBCriticalEnter();
     pORBSubscriptionHandle->pORBHandle = pORBHandle;
     pORBSubscriptionHandle->sendMail = send;
     pORBSubscriptionHandle->receiveMail = receive;
     pORBSubscriptionHandle->next = NULL;
     pORBSubscriptionHandle->generation = pORBHandle->generation;
-
-    // 尾插法加入订阅者链表
+    
+    ORBCriticalEnter();
     if (pORBHandle->pORBSubscriptionList == NULL) {
         pORBHandle->pORBSubscriptionList = pORBSubscriptionHandle;
     } else {
@@ -452,7 +466,7 @@ ORB_ERR_T ORBCheckBlock(ORB_SUBSCRIPTION_HANDLE_T * pORBSubscriptionHandle, bool
  *          复制完毕后自动更新订阅者的 generation 字段。
  * @param pORBSubscriptionHandle    订阅者句柄指针
  * @param data                      用于存储主题数据的缓存区指针
- * @param length                    缓存区长度，必须 >= Topic 当前数据的真实长度
+ * @param length                    缓存区长度，必须 >= Topic 数据的长度
  * @return ORB_ERR_T                ORB_ERR_NONE 表示复制成功，ORB_ERR_INVALID_PARAM 表示参数无效
  */
 ORB_ERR_T ORBCopy(ORB_SUBSCRIPTION_HANDLE_T * pORBSubscriptionHandle, void * data, int length)
@@ -466,7 +480,7 @@ ORB_ERR_T ORBCopy(ORB_SUBSCRIPTION_HANDLE_T * pORBSubscriptionHandle, void * dat
     // ---- 复制数据（同 Check 逻辑，但额外执行 memcpy + 更新 generation）----
     if (pORBSubscriptionHandle->pORBHandle->takeMutexORB != NULL) {
         pORBSubscriptionHandle->pORBHandle->takeMutexORB();
-        memcpy(data, pORBSubscriptionHandle->pORBHandle->data, length);
+        memcpy(data, pORBSubscriptionHandle->pORBHandle->data, pORBSubscriptionHandle->pORBHandle->length);
         pORBSubscriptionHandle->generation = pORBSubscriptionHandle->pORBHandle->generation;
         pORBSubscriptionHandle->pORBHandle->giveMutexORB();
     } else {
