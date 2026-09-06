@@ -43,30 +43,31 @@ static ORB_HANDLE_T * gORBHandleListTail = NULL;
 ORB_ERR_T ORBCreateUseSequenceLock(const char * topic, ORB_HANDLE_T * pORBHandle, void(*wait)(void), void(*take)(void), void(*give)(void), void * buffer, int length)
 {
     uint32_t uuid = ORBNameToUUID(topic);
-    ORB_HANDLE_T * pORBHandleList = gORBHandleListHead;
-
+    ORB_HANDLE_T * pORBHandleList = NULL;
+    
     if (topic == NULL || pORBHandle == NULL || (take == NULL && give != NULL) || (take != NULL && give == NULL) || buffer == NULL || length <= 0) {
         return ORB_ERR_INVALID_PARAM;
     }
-
+    
     pORBHandle->pORBSubscriptionList = NULL;
-
+    
     pORBHandle->topic = topic;
     pORBHandle->uuid = uuid;
     pORBHandle->generation = 0;
     pORBHandle->data = buffer;
     pORBHandle->length = length;
     pORBHandle->next = NULL;
-
+    
     atomic_init(&(pORBHandle->sequenceLock), 0);
     pORBHandle->wait = wait;
     pORBHandle->takeMutexSequenceLock = take;
     pORBHandle->giveMutexSequenceLock = give;
-
+    
     pORBHandle->takeMutexORB = NULL;
     pORBHandle->giveMutexORB = NULL;
-
+    
     ORBCriticalEnter();
+    pORBHandleList = gORBHandleListHead;
     while (pORBHandleList != NULL) {
         if (pORBHandleList->uuid == uuid) {
             ORBCriticalExit();
@@ -101,30 +102,31 @@ ORB_ERR_T ORBCreateUseSequenceLock(const char * topic, ORB_HANDLE_T * pORBHandle
 ORB_ERR_T ORBCreateUseMutex(const char * topic, ORB_HANDLE_T * pORBHandle, void(*take)(void), void(*give)(void), void * buffer, int length)
 {
     uint32_t uuid = ORBNameToUUID(topic);
-    ORB_HANDLE_T * pORBHandleList = gORBHandleListHead;
-
+    ORB_HANDLE_T * pORBHandleList = NULL;
+    
     if (topic == NULL || pORBHandle == NULL || take == NULL || give == NULL || buffer == NULL || length <= 0) {
         return ORB_ERR_INVALID_PARAM;
     }
-
+    
     pORBHandle->pORBSubscriptionList = NULL;
-
+    
     pORBHandle->topic = topic;
     pORBHandle->uuid = uuid;
     pORBHandle->generation = 0;
     pORBHandle->data = buffer;
     pORBHandle->length = length;
     pORBHandle->next = NULL;
-
+    
     atomic_init(&(pORBHandle->sequenceLock), 0);
     pORBHandle->wait = NULL;
     pORBHandle->takeMutexSequenceLock = NULL;
     pORBHandle->giveMutexSequenceLock = NULL;
-
+    
     pORBHandle->takeMutexORB = take;
     pORBHandle->giveMutexORB = give;
-
+    
     ORBCriticalEnter();
+    pORBHandleList = gORBHandleListHead;
     while (pORBHandleList != NULL) {
         if (pORBHandleList->uuid == uuid) {
             ORBCriticalExit();
@@ -161,11 +163,15 @@ ORB_ERR_T ORBCreateUseMutex(const char * topic, ORB_HANDLE_T * pORBHandle, void(
 static ORB_ERR_T ORBPublish(ORB_HANDLE_T * handle, const char * topic, uint32_t uuid, void * data, int length)
 {
     ORB_HANDLE_T * pORBHandle = NULL;
-    ORB_HANDLE_T * pORBHandleList = gORBHandleListHead;
+    ORB_HANDLE_T * pORBHandleList = NULL;
 
     if (data == NULL) {
         return ORB_ERR_INVALID_PARAM;
     }
+
+    ORBCriticalEnter();
+    pORBHandleList = gORBHandleListHead;
+    ORBCriticalExit();
 
     if (handle != NULL) {
         pORBHandle = handle;
@@ -274,11 +280,15 @@ ORB_ERR_T ORBPublishByUUID(uint32_t uuid, void * data, int length)
 static ORB_ERR_T ORBSubscribe(ORB_HANDLE_T * handle, const char * topic, uint32_t uuid, ORB_SUBSCRIPTION_HANDLE_T * pORBSubscriptionHandle, void(*send)(void), void(*receive)(void))
 {
     ORB_HANDLE_T * pORBHandle = NULL;
-    ORB_HANDLE_T * pORBHandleList = gORBHandleListHead;
+    ORB_HANDLE_T * pORBHandleList = NULL;
 
     if (pORBSubscriptionHandle == NULL) {
         return ORB_ERR_INVALID_PARAM;
     }
+
+    ORBCriticalEnter();
+    pORBHandleList = gORBHandleListHead;
+    ORBCriticalExit();
 
     if (handle != NULL) {
         pORBHandle = handle;
