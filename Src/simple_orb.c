@@ -163,15 +163,11 @@ ORB_ERR_T ORBCreateUseMutex(const char * topic, ORB_HANDLE_T * pORBHandle, void(
 static ORB_ERR_T ORBPublish(ORB_HANDLE_T * handle, const char * topic, uint32_t uuid, void * data, int length)
 {
     ORB_HANDLE_T * pORBHandle = NULL;
-    ORB_HANDLE_T * pORBHandleList = NULL;
+    ORB_HANDLE_T * pORBHandleList = gORBHandleListHead;
 
     if (data == NULL) {
         return ORB_ERR_INVALID_PARAM;
     }
-
-    ORBCriticalEnter();
-    pORBHandleList = gORBHandleListHead;
-    ORBCriticalExit();
 
     if (handle != NULL) {
         pORBHandle = handle;
@@ -280,15 +276,11 @@ ORB_ERR_T ORBPublishByUUID(uint32_t uuid, void * data, int length)
 static ORB_ERR_T ORBSubscribe(ORB_HANDLE_T * handle, const char * topic, uint32_t uuid, ORB_SUBSCRIPTION_HANDLE_T * pORBSubscriptionHandle, void(*send)(void), void(*receive)(void))
 {
     ORB_HANDLE_T * pORBHandle = NULL;
-    ORB_HANDLE_T * pORBHandleList = NULL;
+    ORB_HANDLE_T * pORBHandleList = gORBHandleListHead;
 
     if (pORBSubscriptionHandle == NULL) {
         return ORB_ERR_INVALID_PARAM;
     }
-
-    ORBCriticalEnter();
-    pORBHandleList = gORBHandleListHead;
-    ORBCriticalExit();
 
     if (handle != NULL) {
         pORBHandle = handle;
