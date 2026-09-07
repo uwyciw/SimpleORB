@@ -27,7 +27,6 @@
 static ORB_HANDLE_T * gORBHandleListHead = NULL;
 static ORB_HANDLE_T * gORBHandleListTail = NULL;
 
-
 /**
  * @brief 创建 SimpleORB 主题，并使用顺序锁作为临界区保护方案
  * @attention 不可与 ORBCreateUseMutex 同时使用

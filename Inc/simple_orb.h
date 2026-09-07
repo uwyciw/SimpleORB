@@ -98,8 +98,8 @@ ORB_ERR_T ORBCreateUseSequenceLock(const char * topic, ORB_HANDLE_T * pORBHandle
  * @param pORBHandle      SimpleORB 句柄指针
  * @param take            获取 Mutex 的 P 操作回调，不可为 NULL
  * @param give            释放 Mutex 的 V 操作回调，不可为 NULL
-* @param buffer          用于存储主题数据的数据缓冲区指针，初始化后，该区域不应该被其他操作修改
-* @param length          数据缓冲区长度，必须 >0
+ * @param buffer          用于存储主题数据的数据缓冲区指针，初始化后，该区域不应该被其他操作修改
+ * @param length          数据缓冲区长度，必须 >0
  * @return ORB_ERR_T      ORB_ERR_NONE 表示初始化成功，ORB_ERR_INVALID_PARAM 表示参数无效
  */
 ORB_ERR_T ORBCreateUseMutex(const char * topic, ORB_HANDLE_T * pORBHandle, void(*take)(void), void(*give)(void), void * buffer, int length);
