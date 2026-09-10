@@ -171,9 +171,10 @@ static ORB_ERR_T ORBPublish(ORB_HANDLE_T * handle, const char * topic, uint32_t 
     if (handle != NULL) {
         pORBHandle = handle;
     } else if (handle == NULL && topic != NULL) {
+        uuid = ORBNameToUUID(topic);
         ORBCriticalEnter();
         while (pORBHandleList != NULL) {
-            if (strcmp(pORBHandleList->topic, topic) == 0) {
+            if (pORBHandleList->uuid == uuid) {
                 pORBHandle = pORBHandleList;
                 break;
             }

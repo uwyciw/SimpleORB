@@ -50,8 +50,8 @@ typedef struct orb_handle_t {
     const char * topic;                                         /**< 主题名称，用于唯一标识主题 */
     uint32_t uuid;                                              /**< 主题唯一标识符，用于快速定位主题 */
     unsigned int generation;                                    /**< ORB 更新代数，循环计数 */
-    void * data;                                                /**< 最近一次发布的数据缓冲区指针，由发布者提供 */
-    int length;                                                 /**< 最近一次发布的数据字节长度 */
+    void * data;                                                /**< 用于存储主题数据的缓冲区指针，由发布者提供 */
+    int length;                                                 /**< 数据缓冲区长度 */
 
     /* --- Sequence Lock --- */
     atomic_uint sequenceLock;                                   /**< 原子序列锁：偶数值表示"可读稳定态"，奇数值表示"写入进行中" */
