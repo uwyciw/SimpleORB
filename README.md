@@ -1,5 +1,7 @@
 # SimpleORB
 
+English Readme is [here](README-EN.md).
+
 一款基于发布/订阅模式的轻量级异步消息中间件，面向嵌入式裸机与 RTOS 环境。
 
 ## 特色
